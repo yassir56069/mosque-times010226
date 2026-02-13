@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { Cairo } from 'next/font/google';
 import { AnimatePresence, motion } from 'framer-motion';
+import Image from 'next/image'; // Added for the logo
 
 const cairo = Cairo({ 
   subsets: ['latin'],
@@ -42,7 +43,6 @@ export default function Home() {
   const [nextPrayer, setNextPrayer] = useState<NextPrayerStatus>(null);
   const [visiblePrayers, setVisiblePrayers] = useState<PrayerTime[]>([]);
   
-  // NEW: State for the carousel index
   const [funeralIndex, setFuneralIndex] = useState(0);
 
   useEffect(() => {
@@ -54,7 +54,6 @@ export default function Home() {
         
         setTimes(tData);
         setAllFunerals(fData);
-        // Initialize the first 4
         setDisplayFunerals(fData.slice(0, 4));
         setNextFuneralIdx(fData.length > 4 ? 4 : 0);
       } catch (e) { console.error(e); }
@@ -63,35 +62,21 @@ export default function Home() {
     fetchData();
   }, []);
 
-  // CAROUSEL LOGIC: Rotate funerals every 30 seconds
   useEffect(() => {
     if (allFunerals.length <= 4) return;
 
     const interval = setInterval(() => {
       setDisplayFunerals((prev) => {
         const nextItem = allFunerals[nextFuneralIdx];
-        // Create new list: [New Item, ...Old Items except the last one]
         const newList = [nextItem, ...prev.slice(0, 3)];
         return newList;
       });
 
       setNextFuneralIdx((prev) => (prev + 1) % allFunerals.length);
-    }, 30000); // 30 seconds
+    }, 30000); 
 
     return () => clearInterval(interval);
   }, [allFunerals, nextFuneralIdx]);
-
-  // Helper to get exactly 4 funerals for the display
-  const getDisplayedFunerals = () => {
-    if (allFunerals.length <= 4) return allFunerals;
-    
-    // This creates a circular loop (if we hit the end, it wraps around)
-    const items = [];
-    for (let i = 0; i < 4; i++) {
-      items.push(allFunerals[(funeralIndex + i) % allFunerals.length]);
-    }
-    return items;
-  };
 
   const getPrayersForDate = (allPrayers: PrayerTime[], date: Date) => {
     const isFriday = date.getDay() === 5;
@@ -168,14 +153,6 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [times]);
 
-  const formatFuneralDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  };
-  
-  const formatFuneralTime = (dateStr: string) => {
-    return new Date(dateStr).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
-  };
-
   if (loading) return <div className="min-h-screen flex items-center justify-center text-emerald-800">Loading...</div>;
 
   return (
@@ -193,12 +170,35 @@ export default function Home() {
         </svg>
       </div>
 
-      {/* HEADER */}
-      <div className="w-full bg-emerald-800 p-6 md:p-10 rounded-b-[4rem] shadow-2xl mb-8 text-center relative z-10 border-b-8 border-emerald-900/20">
-        <h1 className="text-5xl md:text-7xl font-black text-white tracking-tight">
-          MASJID AL-SALAM
-        </h1>
-        <p className="text-emerald-200 mt-2 text-2xl font-light tracking-[0.2em] uppercase">Daily Prayer Schedule</p>
+      {/* HEADER WITH LOGO AND SLOGAN */}
+      <div className="w-full bg-emerald-800 p-6 md:p-8 rounded-b-[4rem] shadow-2xl mb-8 text-center relative z-10 border-b-8 border-emerald-900/20">
+        <div className="flex flex-col items-center justify-center max-w-4xl mx-auto">
+          {/* LOGO: Added brightness-0 invert to make the black logo white for visibility on dark green */}
+          <div className="relative w-24 h-24 md:w-32 md:h-32 mb-4">
+             <Image 
+                src="/logo.png" 
+                alt="Islamic Help Logo" 
+                fill 
+                className="object-contain brightness-0 invert opacity-95"
+                priority
+             />
+          </div>
+          
+          <h1 className="text-5xl md:text-7xl font-black text-white tracking-tight leading-tight">
+            MASJID AL-IHSAAN
+          </h1>
+
+          {/* SLOGAN */}
+          <p className="text-emerald-300 mt-2 text-lg md:text-2xl font-medium italic tracking-wide">
+            &quot;Islamic Help Reaching People In Need&quot;
+          </p>
+          
+          <div className="w-32 h-1 bg-white/20 my-4 rounded-full" />
+          
+          <p className="text-emerald-100/60 text-xl font-light tracking-[0.2em] uppercase">
+            Daily Prayer Schedule
+          </p>
+        </div>
       </div>
 
       {/* NEXT PRAYER WIDGET */}
@@ -231,7 +231,7 @@ export default function Home() {
           </div>
           
           <div className="flex flex-col flex-1 justify-around py-4">
-            {visiblePrayers.map((prayer, index) => {
+            {visiblePrayers.map((prayer) => {
               const isNext = nextPrayer?.name === prayer.name;
               return (
                 <div key={prayer.id} className={`flex justify-between items-center px-12 py-6 border-b border-slate-100 last:border-0 ${isNext ? 'bg-emerald-50' : ''}`}>
@@ -250,7 +250,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: FUNERALS (CAROUSEL) */}
+        {/* RIGHT COLUMN: FUNERALS */}
         <div className="flex flex-col h-full">
           <div className="bg-slate-800 py-6 text-center rounded-t-[2.5rem] shadow-lg z-20">
             <h2 className="text-3xl text-white font-bold uppercase tracking-widest">Janazah Announcements</h2>
@@ -262,7 +262,7 @@ export default function Home() {
                 {displayFunerals.map((mayyat) => (
                   <motion.div
                     key={mayyat.id}
-                    layout // This is the magic: others slide down when top one is added
+                    layout
                     initial={{ opacity: 0, y: -100, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 100, scale: 0.95 }}
@@ -312,11 +312,13 @@ export default function Home() {
             </div>
           </div>
         </div>
-
       </div>
 
-      <footer className="mt-auto py-6 text-slate-500 text-sm relative z-10">
-        Updated Manually • <a href="/admin" className="hover:text-emerald-700 font-semibold underline decoration-emerald-300">Admin Login</a>
+      <footer className="mt-auto py-8 text-center relative z-10 w-full bg-slate-100/50 border-t border-slate-200">
+        <p className="text-emerald-800 font-bold text-lg mb-2">Islamic Help Reaching People In Need</p>
+        <p className="text-slate-500 text-sm">
+          Made by Yassir Hossan Buksh • Contact 5761 8764 | <a href="/admin" className="hover:text-emerald-700 font-semibold underline decoration-emerald-300">Admin Login</a>
+        </p>
       </footer>
     </main>
   );
