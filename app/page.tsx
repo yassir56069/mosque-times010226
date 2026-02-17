@@ -2,7 +2,8 @@
 import { useState, useEffect } from 'react';
 import { Cairo } from 'next/font/google';
 import { AnimatePresence, motion } from 'framer-motion';
-import Image from 'next/image'; // Added for the logo
+import { useSearchParams } from 'next/navigation';
+import Image from 'next/image';
 
 const cairo = Cairo({ 
   subsets: ['latin'],
@@ -13,8 +14,8 @@ const cairo = Cairo({
 type PrayerTime = {
   id: string;
   name: string;
-  time: string;
-  ampm: string;
+  time: string; // 24h string "13:30"
+  ampm: string; // "PM" (calculated by admin, used for 12h display)
 };
 
 type NextPrayerStatus = {
@@ -24,14 +25,45 @@ type NextPrayerStatus = {
 } | null;
 
 type Funeral = {
-  id: string;
-  fullNameOfDeceased: string;
-  genderOfDeceased: string;
-  funeralAddress: string;
-  dateOfFuneral: string; 
-  janazaPrayerLocation: string;
-  contactNumberOfResponsibleParty: string;
-  ageOfDeceased: string;
+  id?: string;
+  fullNameOfDeceased?: string;
+  genderOfDeceased?: string;
+  funeralAddress?: string;
+  dateOfFuneral?: string; 
+  janazaPrayerLocation?: string;
+  contactNumberOfResponsibleParty?: string;
+  ageOfDeceased?: string;
+};
+
+// --- HELPER FUNCTIONS ---
+
+const isValidDate = (dateStr: string | undefined): boolean => {
+  return !!dateStr && !isNaN(new Date(dateStr).getTime());
+};
+
+const formatSafeTime = (dateStr: string | undefined, format: '12h' | '24h' = '12h') => {
+  if (!isValidDate(dateStr)) return "--:--";
+  try {
+    return new Date(dateStr!).toLocaleTimeString('en-GB', { 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      hour12: format === '12h' // Toggle based on preference
+    });
+  } catch (e) {
+    return "--:--";
+  }
+};
+
+const formatSafeDate = (dateStr: string | undefined) => {
+  if (!isValidDate(dateStr)) return "Date Pending";
+  try {
+    return new Date(dateStr!).toLocaleDateString('en-GB', { 
+      day: 'numeric', 
+      month: 'short' 
+    });
+  } catch (e) {
+    return "Date Pending";
+  }
 };
 
 export default function Home() {
@@ -43,44 +75,66 @@ export default function Home() {
   const [nextPrayer, setNextPrayer] = useState<NextPrayerStatus>(null);
   const [visiblePrayers, setVisiblePrayers] = useState<PrayerTime[]>([]);
   
-  const [funeralIndex, setFuneralIndex] = useState(0);
+  // NEW STATE: Display Preference
+  const [timeFormat, setTimeFormat] = useState<'12h' | '24h'>('12h'); 
+
+  const searchParams = useSearchParams(); 
+  const tvScale = searchParams.get('s'); 
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [tRes, fRes] = await Promise.all([fetch('/api/times'), fetch('/api/funerals')]);
-        const tData = await tRes.json();
-        const fData = await fRes.json();
+        const [tRes, fRes, sRes] = await Promise.all([
+            fetch('/api/times').catch(() => ({ ok: false, json: async () => [] })), 
+            fetch('/api/funerals').catch(() => ({ ok: false, json: async () => [] })),
+            fetch('/api/settings').catch(() => ({ ok: false, json: async () => ({}) })) // Fetch settings
+        ]);
         
-        setTimes(tData);
-        setAllFunerals(fData);
-        setDisplayFunerals(fData.slice(0, 4));
-        setNextFuneralIdx(fData.length > 4 ? 4 : 0);
-      } catch (e) { console.error(e); }
+        const tData = tRes.ok ? await tRes.json() : [];
+        const fData = fRes.ok ? await fRes.json() : [];
+        const sData = sRes.ok ? await sRes.json() : {};
+        
+        setTimes(Array.isArray(tData) ? tData : []);
+        
+        const safeFData = Array.isArray(fData) ? fData : [];
+        setAllFunerals(safeFData);
+        setDisplayFunerals(safeFData.slice(0, 4));
+        setNextFuneralIdx(safeFData.length > 4 ? 4 : 0);
+
+        // Set Format preference
+        if(sData.timeFormat) setTimeFormat(sData.timeFormat as '12h' | '24h');
+
+      } catch (e) { 
+        console.error("Critical Data Fetch Error", e); 
+        setTimes([]);
+        setAllFunerals([]);
+      }
       setLoading(false);
     };
     fetchData();
   }, []);
 
+  // Funeral Rotation Logic (Unchanged)
   useEffect(() => {
-    if (allFunerals.length <= 4) return;
-
+    if (!allFunerals || allFunerals.length <= 4) return;
     const interval = setInterval(() => {
       setDisplayFunerals((prev) => {
-        const nextItem = allFunerals[nextFuneralIdx];
+        const safeIndex = nextFuneralIdx % allFunerals.length;
+        const nextItem = allFunerals[safeIndex];
+        if (!nextItem) return prev;
         const newList = [nextItem, ...prev.slice(0, 3)];
         return newList;
       });
-
       setNextFuneralIdx((prev) => (prev + 1) % allFunerals.length);
     }, 30000); 
-
     return () => clearInterval(interval);
   }, [allFunerals, nextFuneralIdx]);
 
   const getPrayersForDate = (allPrayers: PrayerTime[], date: Date) => {
+    if (!Array.isArray(allPrayers)) return [];
     const isFriday = date.getDay() === 5;
     return allPrayers.filter(p => {
+      if(!p || !p.name) return false;
       const name = p.name.toLowerCase();
       if (isFriday) {
         if (name.includes('dhuhr') || name.includes('zuhr')) return false;
@@ -97,6 +151,7 @@ export default function Home() {
     if (times.length > 0) setVisiblePrayers(getPrayersForDate(times, new Date()));
   }, [times]);
 
+  // --- NEW COUNTDOWN LOGIC (Handles 24h format strictly) ---
   useEffect(() => {
     if (times.length === 0) return;
     const calculateNextPrayer = () => {
@@ -105,12 +160,20 @@ export default function Home() {
       let targetDate: Date | null = null;
       let isTomorrow = false;
 
-      const getPrayerDateObj = (timeStr: string, ampm: string, dateBase: Date) => {
+      // New simplified Date object creator
+      // Expects timeStr to be "HH:mm" (24h format)
+      // Note: If data is old (12h), the Admin page normalizes it on save. 
+      // If purely reading old data without saving, this might be slightly off until Admin saves once.
+      const getPrayerDateObj = (timeStr: string, dateBase: Date) => {
+        if(!timeStr) return new Date(dateBase); 
         const [h, m] = timeStr.split(':');
-        let hours = parseInt(h);
+        const hours = parseInt(h);
         const minutes = parseInt(m);
-        if (ampm === 'PM' && hours !== 12) hours += 12;
-        if (ampm === 'AM' && hours === 12) hours = 0;
+        
+        if (isNaN(hours) || isNaN(minutes)) return new Date(dateBase);
+
+        // NOTE: We no longer do +12 logic here. We assume timeStr is stored as 24h.
+        
         const d = new Date(dateBase);
         d.setHours(hours, minutes, 0, 0);
         return d;
@@ -118,7 +181,8 @@ export default function Home() {
 
       const todayPrayers = getPrayersForDate(times, now);
       for (const prayer of todayPrayers) {
-        const pDate = getPrayerDateObj(prayer.time, prayer.ampm, now);
+        // We pass only timeStr, no AM/PM arg needed for logic
+        const pDate = getPrayerDateObj(prayer.time, now);
         if (pDate > now) {
           targetPrayer = prayer;
           targetDate = pDate;
@@ -132,7 +196,7 @@ export default function Home() {
         const tomorrowPrayers = getPrayersForDate(times, tomorrow);
         if (tomorrowPrayers.length > 0) {
           targetPrayer = tomorrowPrayers[0];
-          targetDate = getPrayerDateObj(targetPrayer.time, targetPrayer.ampm, tomorrow);
+          targetDate = getPrayerDateObj(targetPrayer.time, tomorrow);
           isTomorrow = true;
         }
       }
@@ -153,10 +217,34 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [times]);
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-emerald-800">Loading...</div>;
+  // --- DISPLAY FORMATTER ---
+  // Converts 24h string to desired format
+  const getDisplayTime = (timeStr: string) => {
+    if (!timeStr) return { time: '--:--', ampm: '' };
+
+    if (timeFormat === '24h') {
+        return { time: timeStr, ampm: '' };
+    }
+
+    // 12h Logic
+    const [h, m] = timeStr.split(':');
+    let hours = parseInt(h);
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12; // the hour '0' should be '12'
+    return { 
+        time: `${hours}:${m}`, 
+        ampm 
+    };
+  };
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-emerald-800 font-bold text-2xl animate-pulse">Loading Schedule...</div>;
 
   return (
-    <main className={`min-h-screen bg-slate-50 relative flex flex-col items-center ${cairo.className} overflow-hidden`}>
+    <main 
+      style={{ zoom: tvScale || '1' }} 
+      className={`min-h-screen bg-slate-50 relative flex flex-col items-center ${cairo.className} overflow-hidden`}
+    >
       
       {/* BACKGROUND TEXTURE */}
       <div className="absolute inset-0 opacity-[0.065] pointer-events-none z-0">
@@ -170,10 +258,9 @@ export default function Home() {
         </svg>
       </div>
 
-      {/* HEADER WITH LOGO AND SLOGAN */}
+      {/* HEADER */}
       <div className="w-full bg-emerald-800 p-6 md:p-8 rounded-b-[4rem] shadow-2xl mb-8 text-center relative z-10 border-b-8 border-emerald-900/20">
         <div className="flex flex-col items-center justify-center max-w-4xl mx-auto">
-          {/* LOGO: Added brightness-0 invert to make the black logo white for visibility on dark green */}
           <div className="relative w-24 h-24 md:w-32 md:h-32 mb-4">
              <Image 
                 src="/logo.png" 
@@ -183,18 +270,13 @@ export default function Home() {
                 priority
              />
           </div>
-          
           <h1 className="text-5xl md:text-7xl font-black text-white tracking-tight leading-tight">
             MASJID AL-IHSAAN
           </h1>
-
-          {/* SLOGAN */}
           <p className="text-emerald-300 mt-2 text-lg md:text-2xl font-medium italic tracking-wide">
             &quot;Islamic Help Reaching People In Need&quot;
           </p>
-          
           <div className="w-32 h-1 bg-white/20 my-4 rounded-full" />
-          
           <p className="text-emerald-100/60 text-xl font-light tracking-[0.2em] uppercase">
             Daily Prayer Schedule
           </p>
@@ -233,6 +315,9 @@ export default function Home() {
           <div className="flex flex-col flex-1 justify-around py-4">
             {visiblePrayers.map((prayer) => {
               const isNext = nextPrayer?.name === prayer.name;
+              // Format time based on preference
+              const { time, ampm } = getDisplayTime(prayer.time);
+
               return (
                 <div key={prayer.id} className={`flex justify-between items-center px-12 py-6 border-b border-slate-100 last:border-0 ${isNext ? 'bg-emerald-50' : ''}`}>
                   <span className={`text-4xl md:text-5xl font-extrabold ${isNext ? 'text-emerald-700' : 'text-slate-800'}`}>
@@ -240,9 +325,12 @@ export default function Home() {
                   </span>
                   <div className="flex items-baseline gap-3">
                     <span className={`text-5xl md:text-6xl font-black ${isNext ? 'text-emerald-700' : 'text-slate-900'}`}>
-                      {prayer.time}
+                      {time}
                     </span>
-                    <span className="text-2xl text-emerald-600 font-bold uppercase">{prayer.ampm}</span>
+                    {/* ONLY DISPLAY AM/PM IF 12H MODE */}
+                    {timeFormat === '12h' && (
+                        <span className="text-2xl text-emerald-600 font-bold uppercase">{ampm}</span>
+                    )}
                   </div>
                 </div>
               );
@@ -250,65 +338,79 @@ export default function Home() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: FUNERALS */}
+        {/* RIGHT COLUMN: FUNERALS (Unchanged) */}
         <div className="flex flex-col h-full">
           <div className="bg-slate-800 py-6 text-center rounded-t-[2.5rem] shadow-lg z-20">
             <h2 className="text-3xl text-white font-bold uppercase tracking-widest">Janazah Announcements</h2>
           </div>
           
           <div className="bg-slate-100/50 flex-1 p-6 relative overflow-hidden rounded-b-[2.5rem] border-x border-b border-slate-200">
-            <div className="flex flex-col gap-6">
-              <AnimatePresence mode="popLayout" initial={false}>
-                {displayFunerals.map((mayyat) => (
-                  <motion.div
-                    key={mayyat.id}
-                    layout
-                    initial={{ opacity: 0, y: -100, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 100, scale: 0.95 }}
-                    transition={{ type: "spring", stiffness: 100, damping: 20, duration: 0.8 }}
-                    className="bg-white rounded-3xl p-8 shadow-xl border-l-[16px] border-emerald-600 flex flex-col justify-between min-h-[160px]"
-                  >
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="text-4xl font-black text-slate-900 mb-1 leading-tight">
-                          {mayyat.fullNameOfDeceased}
-                        </h3>
-                        <p className="text-2xl font-bold text-emerald-700">
-                          {mayyat.genderOfDeceased} • Age: {mayyat.ageOfDeceased}
-                        </p>
+            <div className="flex flex-col gap-6 h-full">
+              {(!displayFunerals || displayFunerals.length === 0) ? (
+                 <div className="flex-1 flex flex-col items-center justify-center text-slate-400 opacity-60">
+                   <span className="text-6xl mb-4">🤲</span>
+                   <p className="text-2xl font-bold uppercase tracking-widest text-center">No Announcements</p>
+                 </div>
+              ) : (
+                <AnimatePresence mode="popLayout" initial={false}>
+                  {displayFunerals.map((mayyat, index) => (
+                    <motion.div
+                      key={mayyat?.id || `mayyat-fallback-${index}`}
+                      layout
+                      initial={{ opacity: 0, y: -100, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 100, scale: 0.95 }}
+                      transition={{ type: "spring", stiffness: 100, damping: 20, duration: 0.8 }}
+                      className="bg-white rounded-3xl p-8 shadow-xl border-l-[16px] border-emerald-600 flex flex-col justify-between min-h-[160px]"
+                    >
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h3 className="text-4xl font-black text-slate-900 mb-1 leading-tight">
+                            {mayyat?.fullNameOfDeceased || 'Name Unavailable'}
+                          </h3>
+                          <p className="text-2xl font-bold text-emerald-700">
+                            {mayyat?.genderOfDeceased || 'Unknown'} • Age: {mayyat?.ageOfDeceased || 'N/A'}
+                          </p>
+                        </div>
+                        
+                        <div className="text-right bg-slate-900 text-white px-6 py-4 rounded-2xl">
+                          <div className="text-sm uppercase font-bold text-emerald-400 mb-1">Janazah Time</div>
+                          
+                          {/* UPDATED LINE BELOW: Pass timeFormat state here */}
+                          <div className="text-4xl font-black leading-none">
+                            {formatSafeTime(mayyat?.dateOfFuneral, timeFormat)}
+                          </div>
+                          
+                          <div className="text-lg font-bold text-slate-400 mt-1">
+                            {formatSafeDate(mayyat?.dateOfFuneral)}
+                          </div>
+                        </div>
                       </div>
                       
-                      <div className="text-right bg-slate-900 text-white px-6 py-4 rounded-2xl">
-                        <div className="text-sm uppercase font-bold text-emerald-400 mb-1">Janazah Time</div>
-                        <div className="text-4xl font-black leading-none">
-                          {new Date(mayyat.dateOfFuneral).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                      <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
+                        <div className="flex items-center gap-3">
+                          <span className="text-3xl">📍</span>
+                          <div>
+                            <span className="block text-[10px] uppercase font-black text-slate-400">Address</span>
+                            <span className="text-xl font-bold text-slate-700 block max-w-[250px]">
+                                {mayyat?.funeralAddress || 'Address not provided'}
+                            </span>
+                          </div>
                         </div>
-                        <div className="text-lg font-bold text-slate-400 mt-1">
-                          {new Date(mayyat.dateOfFuneral).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
-                      <div className="flex items-center gap-3">
-                        <span className="text-3xl">📍</span>
-                        <div>
-                          <span className="block text-[10px] uppercase font-black text-slate-400">Address</span>
-                          <span className="text-xl font-bold text-slate-700 block max-w-[250px]">{mayyat.funeralAddress}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-3xl">🕌</span>
-                        <div>
-                          <span className="block text-[10px] uppercase font-black text-slate-400">Masjid</span>
-                          <span className="text-xl font-bold text-slate-700  block max-w-[250px]">{mayyat.janazaPrayerLocation}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-3xl">🕌</span>
+                          <div>
+                            <span className="block text-[10px] uppercase font-black text-slate-400">Masjid</span>
+                            <span className="text-xl font-bold text-slate-700  block max-w-[250px]">
+                                {mayyat?.janazaPrayerLocation || 'Location Pending'}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              )}
             </div>
           </div>
         </div>
