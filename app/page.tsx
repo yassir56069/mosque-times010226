@@ -61,6 +61,7 @@ const formatSafeDate = (dateStr: string | undefined) => {
       day: 'numeric', 
       month: 'short' 
     });
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } catch (e) {
     return "Date Pending";
   }
