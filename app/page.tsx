@@ -1,8 +1,8 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react'; // Add Suspense
 import { Cairo } from 'next/font/google';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation'; // Ensure this is here
 import Image from 'next/image';
 
 const cairo = Cairo({ 
@@ -49,6 +49,7 @@ const formatSafeTime = (dateStr: string | undefined, format: '12h' | '24h' = '12
       minute: '2-digit', 
       hour12: format === '12h' // Toggle based on preference
     });
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } catch (e) {
     return "--:--";
   }
@@ -67,7 +68,8 @@ const formatSafeDate = (dateStr: string | undefined) => {
   }
 };
 
-export default function Home() {
+function DashboardContent() {
+  const searchParams = useSearchParams();
   const [times, setTimes] = useState<PrayerTime[]>([]);
   const [allFunerals, setAllFunerals] = useState<Funeral[]>([]);
   const [displayFunerals, setDisplayFunerals] = useState<Funeral[]>([]);
@@ -79,7 +81,6 @@ export default function Home() {
   // NEW STATE: Display Preference
   const [timeFormat, setTimeFormat] = useState<'12h' | '24h'>('12h'); 
 
-  const searchParams = useSearchParams(); 
   const tvScale = searchParams.get('s'); 
 
   useEffect(() => {
@@ -424,5 +425,13 @@ export default function Home() {
         </p>
       </footer>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-emerald-800 font-bold text-2xl">Loading...</div>}>
+      <DashboardContent />
+    </Suspense>
   );
 }
